@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from 
 import { join, resolve, basename } from 'node:path';
 import yaml from 'js-yaml';
 import { error, heading, info, success, warn } from '../utils/format.js';
+import { readCursorRules } from '../adapters/cursor.js';
 
 interface ImportOptions {
   from: string;
@@ -87,25 +88,89 @@ function importFromClaude(sourcePath: string, targetDir: string): void {
 function importFromCursor(sourcePath: string, targetDir: string): void {
   const sourceDir = resolve(sourcePath);
 
-  // Look for .cursorrules or AGENTS.md
+  const dirName = basename(sourceDir);
+  const agentName = dirName.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+
+  // --- Enhanced import: read .cursor/rules/*.mdc first ---
+  const mdcRules = readCursorRules(sourceDir);
+
+  if (mdcRules.length > 0) {
+    info(`Found ${mdcRules.length} rule(s) in .cursor/rules/`);
+
+    // Separate global (alwaysApply) rules from skill rules
+    const globalRules = mdcRules.filter(r => r.parsed.frontmatter.alwaysApply === true);
+    const skillRules = mdcRules.filter(r => r.parsed.frontmatter.alwaysApply !== true);
+
+    // Build SOUL.md from global alwaysApply rules
+    if (globalRules.length > 0) {
+      const soulParts: string[] = [`# Soul — imported from Cursor rules\n`];
+      for (const rule of globalRules) {
+        if (rule.parsed.body) {
+          soulParts.push(rule.parsed.body);
+          soulParts.push('');
+        }
+      }
+      writeFileSync(join(targetDir, 'SOUL.md'), soulParts.join('\n').trimEnd() + '\n', 'utf-8');
+      success(`Created SOUL.md (from ${globalRules.length} alwaysApply rule(s))`);
+    }
+
+    // Convert scoped skill rules to skills/
+    const skillNames: string[] = [];
+    for (const rule of skillRules) {
+      const skillName = rule.filename.replace(/\.mdc$/, '');
+      const skillDir = join(targetDir, 'skills', skillName);
+      mkdirSync(skillDir, { recursive: true });
+
+      // Build SKILL.md frontmatter
+      const fm: Record<string, unknown> = {
+        name: skillName,
+        description: rule.parsed.frontmatter.description ?? `Imported from .cursor/rules/${rule.filename}`,
+      };
+
+      // Carry globs into metadata for round-trip fidelity
+      const globs = rule.parsed.frontmatter.globs;
+      if (globs) {
+        const globStr = Array.isArray(globs) ? globs.join(' ') : globs;
+        fm['metadata'] = { globs: globStr };
+      }
+
+      const skillMd = `---\n${yaml.dump(fm).trimEnd()}\n---\n\n${(rule.parsed.body ?? '').trim()}\n`;
+      writeFileSync(join(skillDir, 'SKILL.md'), skillMd, 'utf-8');
+      skillNames.push(skillName);
+      success(`Created skill: ${skillName}`);
+    }
+
+    const agentYaml = {
+      spec_version: '0.1.0',
+      name: agentName,
+      version: '0.1.0',
+      description: `Imported from Cursor project: ${dirName}`,
+      ...(skillNames.length > 0 ? { skills: skillNames } : {}),
+    };
+    writeFileSync(join(targetDir, 'agent.yaml'), yaml.dump(agentYaml), 'utf-8');
+    success('Created agent.yaml');
+
+    return;
+  }
+
+  // --- Legacy fallback: .cursorrules or AGENTS.md ---
   let instructions = '';
   const cursorRulesPath = join(sourceDir, '.cursorrules');
   const agentsMdPath = join(sourceDir, 'AGENTS.md');
 
   if (existsSync(cursorRulesPath)) {
     instructions = readFileSync(cursorRulesPath, 'utf-8');
-    info('Found .cursorrules');
+    info('Found .cursorrules (legacy)');
   } else if (existsSync(agentsMdPath)) {
     instructions = readFileSync(agentsMdPath, 'utf-8');
     info('Found AGENTS.md');
   } else {
-    throw new Error('No .cursorrules or AGENTS.md found in source directory');
+    throw new Error('No .cursor/rules/ directory, .cursorrules, or AGENTS.md found in source directory');
   }
 
-  const dirName = basename(sourceDir);
   const agentYaml = {
     spec_version: '0.1.0',
-    name: dirName.toLowerCase().replace(/[^a-z0-9-]/g, '-'),
+    name: agentName,
     version: '0.1.0',
     description: `Imported from Cursor project: ${dirName}`,
   };

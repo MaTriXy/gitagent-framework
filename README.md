@@ -359,6 +359,7 @@ Adapters are used by both `export` and `run`. Available adapters:
 | `opencode` | OpenCode instructions + config |
 | `openclaw` | OpenClaw format |
 | `nanobot` | Nanobot format |
+| `cursor` | Cursor `.cursor/rules/*.mdc` files |
 
 ```bash
 # Export to system prompt
