@@ -349,7 +349,13 @@ function buildHooksConfig(agentDir: string): Record<string, any> | null {
 
       // Convert each hook to Gemini CLI format with matcher
       const geminiHookDefs = validHooks.map((hook, index) => {
+        // On Windows, Gemini CLI uses PowerShell which can't run .sh files directly
+        // Prefix with 'bash' and include hooks/ directory path
         let command = hook.script;
+        if (process.platform === 'win32' && hook.script.endsWith('.sh')) {
+          command = `bash hooks/${hook.script}`;
+        }
+        
         return {
           name: `hook-${index}`,
           type: 'command',
